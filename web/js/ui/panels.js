@@ -181,12 +181,18 @@ export class Panels {
     const { pickFiles, toast } = await import('./widgets.js');
     const files = await pickFiles({ accept: paint.kind === 'image' ? 'image/*' : 'video/*' });
     if (!files.length) return;
+    const previous = { blob: paint.blob, uri: paint.uri };
     try {
       await paint.load(files[0], files[0].name);
       this.app.updatePlayingState();
       this.app.commit('history.replaceMedia');
     } catch {
       toast(t('error.cannotLoad', { name: files[0].name }), { kind: 'error' });
+      // load() already swapped the media: put the previous file back.
+      if (previous.blob) await paint.load(previous.blob, previous.uri).catch(() => {});
+      else paint.uri = previous.uri;
+      this.app.updatePlayingState();
+      this.app.emitChange();
     }
   }
 

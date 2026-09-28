@@ -158,10 +158,11 @@ export function drawCrosshair(ctx, p, width, height) {
 /* ------------------------------------------------------------ test cards */
 
 const testImages = {};
-function testImage(name, onload) {
+let onTestImageLoad = null;
+function testImage(name) {
   if (!testImages[name]) {
     const img = new Image();
-    img.onload = () => onload && onload();
+    img.onload = () => onTestImageLoad && onTestImageLoad();
     img.src = new URL(`../../assets/${name}`, import.meta.url).href;
     testImages[name] = img;
   }
@@ -169,7 +170,9 @@ function testImage(name, onload) {
   return img.complete && img.naturalWidth ? img : null;
 }
 
-export function preloadTestCards() {
+/** Preloads the test card images; onLoad is called when one finishes loading (to redraw). */
+export function preloadTestCards(onLoad = null) {
+  onTestImageLoad = onLoad;
   ['test-signal.svg', 'pal-test-signal.svg', 'ntsc-test-signal.svg', 'mapmap-logo.svg'].forEach((n) => testImage(n));
 }
 

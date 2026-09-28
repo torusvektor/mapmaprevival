@@ -141,7 +141,7 @@ export class App {
     this._bindGlobalEvents();
     this._setupSplitters();
     this.applyLayout();
-    preloadTestCards();
+    preloadTestCards(() => this.invalidate());
 
     this.history.reset(this._historyState('history.new'));
     await this.restoreAutosave();
@@ -240,7 +240,15 @@ export class App {
 
   _restoreState(state) {
     const before = new Set(this.project.paints);
-    this.project.restore(state.snap);
+    const reload = this.project.restore(state.snap);
+    if (reload.length) {
+      Promise.all(reload.map(({ paint, blob, uri }) => paint.load(blob, uri).catch(() => {})))
+        .then(() => {
+          this.updatePlayingState();
+          this.emitChange();
+          this.scheduleAutosave();
+        });
+    }
     const after = new Set(this.project.paints);
     for (const p of before) if (!after.has(p)) p.deactivate();
     for (const p of after) if (!before.has(p)) p.activate();

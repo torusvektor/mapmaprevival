@@ -197,15 +197,25 @@ export class Project {
     return {
       outputWidth: this.outputWidth,
       outputHeight: this.outputHeight,
-      paints: this.paints.map((p) => ({ ref: p, data: p.toJSON() })),
+      // The media blob is kept too, so undoing "replace file" brings the old media back.
+      paints: this.paints.map((p) => ({ ref: p, data: p.toJSON(), blob: p.blob || null })),
       mappings: this.mappings.map((m) => m.toJSON()),
     };
   }
 
+  /**
+   * Restores a snapshot. Returns the paints whose media differs from the snapshot
+   * ([{ paint, blob, uri }]); the caller reloads them (loading is asynchronous).
+   */
   restore(snap) {
     this.outputWidth = snap.outputWidth;
     this.outputHeight = snap.outputHeight;
-    this.paints = snap.paints.map(({ ref, data }) => { ref.applyJSON(data); return ref; });
+    const reload = [];
+    this.paints = snap.paints.map(({ ref, data, blob }) => {
+      ref.applyJSON(data);
+      if (blob && ref.blob !== blob && ref.load) reload.push({ paint: ref, blob, uri: data.uri });
+      return ref;
+    });
     this.mappings = snap.mappings
       .map((json) => {
         const paint = this.getPaintById(json.paintId);
@@ -213,6 +223,7 @@ export class Project {
       })
       .filter(Boolean);
     this.reserveIds();
+    return reload;
   }
 
   /** Plain JSON (without media) for persistence. */
