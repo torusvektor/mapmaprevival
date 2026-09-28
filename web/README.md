@@ -36,11 +36,9 @@ sdílenou paměť (`shmsrc`).
 ### Varianta A – GitHub Pages (doporučeno, funguje i kamera na telefonu)
 
 1. V repozitáři na GitHubu: **Settings → Pages → Build and deployment → Source: GitHub Actions**.
-2. Po každém pushnutí do větve `main` nebo `develop`, které mění složku `web/`, workflow
-   `.github/workflows/web-pages.yml` aplikaci zveřejní (lze spustit i ručně v záložce *Actions*).
-   GitHub ve výchozím stavu povoluje nasazení na Pages jen z hlavní větve (`main`) – buď
-   sloučte `develop` do `main`, nebo v **Settings → Environments → github-pages → Deployment
-   branches** přidejte větev `develop`.
+2. Po každém pushnutí do větve `main` (např. po sloučení pull requestu), které mění složku
+   `web/`, workflow `.github/workflows/web-pages.yml` aplikaci zveřejní. Lze ho spustit i ručně
+   v záložce *Actions* (*Deploy MapMap Web to GitHub Pages → Run workflow*).
 3. Otevřete `https://torusvektor.github.io/mapmaprevival/` na libovolném zařízení.
 
 ### Varianta B – lokálně na MacBooku

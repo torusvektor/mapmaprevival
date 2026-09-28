@@ -1,12 +1,12 @@
 # Publish the web version (web/) to GitHub Pages.
 # One-time setup: repository Settings -> Pages -> Build and deployment -> Source: "GitHub Actions".
-# The "github-pages" environment only accepts the default branch (main) unless other branches are
-# allowed in Settings -> Environments -> github-pages -> Deployment branches (e.g. add "develop").
+# Deploys from the default branch (main), the only branch the "github-pages" environment accepts
+# by default; it can also be started by hand from the Actions tab.
 name: Deploy MapMap Web to GitHub Pages
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main ]
     paths:
       - 'web/**'
       - '.github/workflows/web-pages.yml'
