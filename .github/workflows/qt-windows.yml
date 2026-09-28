@@ -10,65 +10,24 @@ on:
 jobs:
   build:
 
-    # windows-2019 has been retired; Qt 5.15.2 msvc2019 builds fine with Visual Studio 2022.
-    runs-on: windows-2022
-
-    env:
-      GST_VERSION: '1.26.0'
+    runs-on: windows-2019
 
     steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-python@v5
-      with:
-        python-version: '3.12'
+    - uses: actions/checkout@v2
     - name: Install Qt
-      uses: jurplel/install-qt-action@v4
+      uses: jurplel/install-qt-action@v2
       with:
-        version: '5.15.2'
+        version: '5.12.8'
         host: 'windows'
         target: 'desktop'
-        arch: 'win64_msvc2019_64'
-        setup-python: false
-    # GStreamer MSVC runtime + development installers; the file names are taken from
-    # the download directory listing. src/src.pri reads GSTREAMER_1_0_ROOT_MSVC_X86_64.
-    - name: Install GStreamer
-      shell: pwsh
-      run: |
-        $ErrorActionPreference = 'Stop'
-        $base = "https://gstreamer.freedesktop.org/data/pkg/windows/$env:GST_VERSION/msvc"
-        $listing = (Invoke-WebRequest -Uri "$base/" -UseBasicParsing).Content
-        $names = [regex]::Matches($listing, 'gstreamer-1\.0-(devel-)?msvc-x86_64-[0-9.]+\.msi') | ForEach-Object { $_.Value } | Sort-Object -Unique
-        Write-Host "Installers: $names"
-        if (-not $names) { throw "No GStreamer MSVC installers found in $base/" }
-        foreach ($name in $names) {
-          $msi = Join-Path $env:RUNNER_TEMP $name
-          Invoke-WebRequest -Uri "$base/$name" -OutFile $msi -UseBasicParsing
-          $p = Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /qn ADDLOCAL=ALL" -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "msiexec failed for $name (exit code $($p.ExitCode))" }
-        }
-        $candidates = @(
-          [Environment]::GetEnvironmentVariable('GSTREAMER_1_0_ROOT_MSVC_X86_64', 'Machine'),
-          'C:\Program Files\gstreamer\1.0\msvc_x86_64',
-          'C:\gstreamer\1.0\msvc_x86_64'
-        ) | Where-Object { $_ -and (Test-Path (Join-Path $_ 'include\gstreamer-1.0\gst\gst.h')) }
-        if (-not $candidates) { throw 'GStreamer development files not found after installation' }
-        $root = @($candidates)[0]
-        Write-Host "GStreamer found in $root"
-        # qmake does not quote library paths with spaces: use a junction without spaces.
-        New-Item -ItemType Junction -Path 'C:\gst' -Target $root | Out-Null
-        "GSTREAMER_1_0_ROOT_MSVC_X86_64=C:\gst" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-    - name: Set up MSVC
-      uses: ilammy/msvc-dev-cmd@v1
-      with:
-        arch: x64
+        arch: 'win64_msvc2017_64'
+        modules: 'gui core serialport network opengl xml'
     - name: qmake
-      run: |
-        qmake --version
-        qmake . CONFIG+=release
+      run: qmake .
     - name: make
-      run: nmake
+      run: make
     - name: make check
-      run: nmake check
+      run: make check
 
 #    - name: make distcheck
 #      run: make distcheck
