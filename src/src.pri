@@ -8,11 +8,11 @@ QT += multimedia
 greaterThan(QT_MAJOR_VERSION, 4) {
   QT -= gui # using widgets instead gui in Qt5
   QT += widgets
-  # webenginewidgets is heavy and not always available, use QTextBrowser on Windows
-  !win32 {
+  # webenginewidgets is heavy and not always available: use it only if installed
+  # (never on Windows), otherwise the shortcut window uses QTextBrowser.
+  !win32:qtHaveModule(webenginewidgets) {
     QT += webenginewidgets
-  }
-  win32 {
+  } else {
     DEFINES += NO_WEBENGINE
   }
 }

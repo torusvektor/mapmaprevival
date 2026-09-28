@@ -10,21 +10,26 @@ on:
 jobs:
   build:
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+
+    env:
+      QT_SELECT: qt5
 
     steps:
-    - uses: actions/checkout@v2
-    - name: Install Qt
-      uses: jurplel/install-qt-action@v2
-      with:
-        version: '5.12.8'
-        host: 'linux'
-        target: 'desktop'
-        modules: 'gui core serialport network opengl xml'
+    - uses: actions/checkout@v4
+    # Qt 5.15 and GStreamer from the Ubuntu packages (no Qt download needed).
+    - name: Install Qt and GStreamer
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          qtbase5-dev qtbase5-dev-tools qtmultimedia5-dev libqt5opengl5-dev qttools5-dev-tools \
+          libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgl-dev libx11-dev
     - name: qmake
-      run: qmake .
+      run: |
+        qmake --version
+        qmake .
     - name: make
-      run: make
+      run: make -j"$(nproc)"
     - name: make check
       run: make check
 

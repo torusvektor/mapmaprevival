@@ -12,17 +12,47 @@ jobs:
 
     runs-on: macos-latest
 
+    env:
+      GST_VERSION: '1.24.12'
+
     steps:
-    - uses: actions/checkout@v2
-    - name: Install Qt
-      uses: jurplel/install-qt-action@v2
+    - uses: actions/checkout@v4
+    # The prebuilt Qt 5.15.2 for macOS is x86_64 only: its tools run through Rosetta
+    # on the Apple Silicon runners and the app is built for x86_64.
+    - name: Install Rosetta
+      run: sudo /usr/sbin/softwareupdate --install-rosetta --agree-to-license || true
+    - uses: actions/setup-python@v5
       with:
+        python-version: '3.12'
+    - name: Install Qt
+      uses: jurplel/install-qt-action@v4
+      with:
+        version: '5.15.2'
+        host: 'mac'
         target: 'desktop'
-        modules: 'gui core serialport network opengl xml'
+        arch: 'clang_64'
+        setup-python: false
+    # src/src.pri expects the official GStreamer framework (universal x86_64 + arm64).
+    - name: Install GStreamer
+      run: |
+        for pkg in "gstreamer-1.0-$GST_VERSION-universal.pkg" "gstreamer-1.0-devel-$GST_VERSION-universal.pkg"; do
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$pkg" "https://gstreamer.freedesktop.org/data/pkg/osx/$GST_VERSION/$pkg"
+          sudo installer -pkg "$RUNNER_TEMP/$pkg" -target /
+        done
+        ls /Library/Frameworks/GStreamer.framework/Versions/1.0/Headers/gst/gst.h
+    # Qt 5.15.2 still links the AGL framework, which recent macOS SDKs no longer ship.
+    - name: Remove AGL from Qt 5.15.2
+      run: |
+        QT_DIR="${QT_ROOT_DIR:-$Qt5_DIR}"
+        grep -rl --include='*.conf' --include='*.pri' --include='*.prl' 'AGL' "$QT_DIR" | while read -r f; do
+          sed -i '' -e 's/-framework AGL//g' -e 's#[^ ]*AGL\.framework/Headers/\{0,1\}##g' "$f"
+        done
     - name: qmake
-      run: qmake .
+      run: |
+        qmake --version
+        qmake .
     - name: make
-      run: make
+      run: make -j"$(sysctl -n hw.ncpu)"
     - name: make check
       run: make check
 
