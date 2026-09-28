@@ -7,6 +7,11 @@ MapMap Revival (Windows)
 
 :robot: **Ce fork a été entièrement mis à jour par l'IA ![Claude](https://img.shields.io/badge/Claude-D97757?style=for-the-badge&logo=claude&logoColor=white) (Anthropic) sur l'initiative de @gilforge pour des travaux étudiants en arts graphiques.**
 
+:globe_with_meridians: **New: MapMap Web** – a browser version that runs on macOS, iOS/iPadOS, Android and
+Windows without installation (HTML5/WebGL). See [`web/README.md`](web/README.md). Run it locally with
+`cd web && python3 -m http.server 8000`, or publish it with GitHub Pages (Settings → Pages → Source:
+GitHub Actions).
+
 MapMap is a free video mapping software.
 
 Projection mapping, also known as video mapping and spatial augmented
