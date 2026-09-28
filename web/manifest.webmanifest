@@ -1,0 +1,28 @@
+{
+  "name": "MapMap Web – video mapping",
+  "short_name": "MapMap",
+  "description": "Free video mapping (projection mapping) in the browser. Port of the MapMap desktop application.",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["standalone", "fullscreen"],
+  "orientation": "any",
+  "background_color": "#272a36",
+  "theme_color": "#1b1d26",
+  "categories": ["graphics", "multimedia", "productivity"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ],
+  "file_handlers": [
+    {
+      "action": "./",
+      "accept": {
+        "application/x-mapmap": [".mmp", ".mmpz"]
+      }
+    }
+  ]
+}
