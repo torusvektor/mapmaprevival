@@ -33,17 +33,17 @@ jobs:
         arch: 'clang_64'
         setup-python: false
     # src/src.pri expects the official GStreamer framework (universal x86_64 + arm64).
-    # The package names are taken from the download directory listing.
+    # The development package is installed when it exists (the headers must end up in the framework).
     - name: Install GStreamer
       run: |
         set -euo pipefail
         base="https://gstreamer.freedesktop.org/data/pkg/osx/$GST_VERSION"
-        pkgs=$(curl -fsSL --retry 3 "$base/" | grep -oE 'gstreamer-1\.0-(devel-)?[0-9.]+-universal\.pkg' | sort -u)
-        echo "Packages: $pkgs"
-        if [ -z "$pkgs" ]; then echo "No GStreamer packages found in $base/"; exit 1; fi
-        for pkg in $pkgs; do
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$pkg" "$base/$pkg"
-          sudo installer -pkg "$RUNNER_TEMP/$pkg" -target /
+        for pkg in "gstreamer-1.0-$GST_VERSION-universal.pkg" "gstreamer-1.0-devel-$GST_VERSION-universal.pkg"; do
+          if curl -fsSL --retry 3 -o "$RUNNER_TEMP/$pkg" "$base/$pkg"; then
+            sudo installer -pkg "$RUNNER_TEMP/$pkg" -target /
+          else
+            echo "::warning::$pkg could not be downloaded"
+          fi
         done
         ls /Library/Frameworks/GStreamer.framework/Versions/1.0/Headers/gst/gst.h
     # Qt 5.15.2 still links the AGL framework, which recent macOS SDKs no longer ship.
