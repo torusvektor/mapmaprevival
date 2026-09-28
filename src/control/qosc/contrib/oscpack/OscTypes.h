@@ -61,10 +61,15 @@ typedef unsigned long long uint64;
 
 
 
-#if defined(__x86_64__) || defined(_M_X64)
+// On LP64 platforms (64-bit Linux/macOS, including ARM64 such as Apple Silicon)
+// long is 64 bits wide, so int32 must be an int.
+#if defined(__x86_64__) || defined(_M_X64) || defined(__LP64__) || defined(_LP64)
 
 typedef signed int int32;
 typedef unsigned int uint32;
+
+// int32 is int: no separate int overloads are needed.
+#define OSCPACK_INT32_IS_INT 1
 
 #else
 
