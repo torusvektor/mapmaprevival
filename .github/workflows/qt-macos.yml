@@ -13,7 +13,7 @@ jobs:
     runs-on: macos-latest
 
     env:
-      GST_VERSION: '1.24.12'
+      GST_VERSION: '1.26.0'
 
     steps:
     - uses: actions/checkout@v4
@@ -33,10 +33,16 @@ jobs:
         arch: 'clang_64'
         setup-python: false
     # src/src.pri expects the official GStreamer framework (universal x86_64 + arm64).
+    # The package names are taken from the download directory listing.
     - name: Install GStreamer
       run: |
-        for pkg in "gstreamer-1.0-$GST_VERSION-universal.pkg" "gstreamer-1.0-devel-$GST_VERSION-universal.pkg"; do
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$pkg" "https://gstreamer.freedesktop.org/data/pkg/osx/$GST_VERSION/$pkg"
+        set -euo pipefail
+        base="https://gstreamer.freedesktop.org/data/pkg/osx/$GST_VERSION"
+        pkgs=$(curl -fsSL --retry 3 "$base/" | grep -oE 'gstreamer-1\.0-(devel-)?[0-9.]+-universal\.pkg' | sort -u)
+        echo "Packages: $pkgs"
+        if [ -z "$pkgs" ]; then echo "No GStreamer packages found in $base/"; exit 1; fi
+        for pkg in $pkgs; do
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$pkg" "$base/$pkg"
           sudo installer -pkg "$RUNNER_TEMP/$pkg" -target /
         done
         ls /Library/Frameworks/GStreamer.framework/Versions/1.0/Headers/gst/gst.h
