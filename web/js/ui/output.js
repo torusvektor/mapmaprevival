@@ -83,7 +83,7 @@ export class OutputManager {
     root.hidden = false;
     root.innerHTML = `<div class="pres-stage"></div><div class="pres-hud">${hudHtml()}</div>`;
     this.presentationView = new EditorView(this.app, root.querySelector('.pres-stage'), { kind: 'output', presentation: true });
-    this._setupHud(root, document, this.presentationView, () => this.exitPresentation());
+    this._presentationHudCleanup = this._setupHud(root, document, this.presentationView, () => this.exitPresentation());
     document.body.classList.add('presenting');
     requestFullscreen(root).catch(() => {
       if (/iPhone|iPod/.test(navigator.userAgent) && !navigator.standalone) {
@@ -97,9 +97,10 @@ export class OutputManager {
   exitPresentation() {
     if (!this.presentationView) return;
     exitFullscreen(document);
-    this.presentationView.dispose();
+    this._presentationHudCleanup?.();
+    this._presentationHudCleanup = null;
+    this._releaseView(this.presentationView);
     this.presentationView = null;
-    clearTimeout(this._hudTimer);
     this.root.innerHTML = '';
     this.root.hidden = true;
     document.body.classList.remove('presenting');
@@ -133,7 +134,13 @@ export class OutputManager {
     else requestFullscreen(target).catch(() => {});
   }
 
-  /** Auto-hiding control bar shown over the output. */
+  /** Disposes a closed output view; the editor's output view takes over if it was active. */
+  _releaseView(view) {
+    if (this.app.activeView === view) this.app.setActiveView(this.app.views.output);
+    try { view.dispose(); } catch { /* window gone */ }
+  }
+
+  /** Auto-hiding control bar shown over the output. Returns a function that removes it. */
   _setupHud(root, doc, view, onClose) {
     const hud = root.querySelector('.pres-hud');
     const info = hud.querySelector('.hud-info');
@@ -147,11 +154,12 @@ export class OutputManager {
       hud.querySelector('[data-hud=fullscreen]').hidden = !fsSupported;
       info.textContent = `${this.app.project.outputWidth}×${this.app.project.outputHeight}`;
     };
+    let timer = 0;
     const show = () => {
       root.classList.add('hud-visible');
       update();
-      clearTimeout(view._hudTimer);
-      view._hudTimer = setTimeout(() => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
         if (!hud.matches(':hover')) root.classList.remove('hud-visible');
       }, HUD_TIMEOUT);
     };
@@ -169,11 +177,20 @@ export class OutputManager {
       update();
       show();
     });
+    const onChange = () => { if (root.isConnected) update(); };
     root.addEventListener('pointermove', show);
     root.addEventListener('pointerdown', show);
     win.addEventListener('keydown', show);
-    this.app.on('change', () => { if (root.isConnected) update(); });
+    this.app.on('change', onChange);
     show();
+    return () => {
+      clearTimeout(timer);
+      root.removeEventListener('pointermove', show);
+      root.removeEventListener('pointerdown', show);
+      try { win.removeEventListener('keydown', show); } catch { /* window gone */ }
+      this.app.off('change', onChange);
+      root.classList.remove('hud-visible');
+    };
   }
 
   /* ------------------------------------------------------ output window */
@@ -183,6 +200,7 @@ export class OutputManager {
       this.win.focus();
       return;
     }
+    if (this.win) this._disposeWindow(); // closed, but not noticed yet
     const w = window.open('', 'mapmap-output', 'popup=yes,width=960,height=540');
     if (!w) {
       toast(t('error.popupBlocked'), { kind: 'error', timeout: 5000 });
@@ -204,7 +222,7 @@ export class OutputManager {
       if (this.windowView || w.closed) return;
       const root = doc.getElementById('output-root');
       this.windowView = new EditorView(this.app, root.querySelector('.pres-stage'), { kind: 'output', presentation: true });
-      this._setupHud(root, doc, this.windowView, () => w.close());
+      this._windowHudCleanup = this._setupHud(root, doc, this.windowView, () => w.close());
       w.addEventListener('keydown', (e) => {
         if (e.key === 'Escape' && fullscreenElement(doc)) return;
         if (e.key === 'f' || e.key === 'F') {
@@ -223,14 +241,14 @@ export class OutputManager {
         w.requestAnimationFrame(loop);
       };
       w.requestAnimationFrame(loop);
-      w.addEventListener('pagehide', () => this._disposeWindow());
+      w.addEventListener('pagehide', () => { if (this.win === w) this._disposeWindow(); });
       const hint = doc.querySelector('.output-hint');
       setTimeout(() => hint && hint.classList.add('fade'), 4000);
     };
     // The stylesheet may take a moment; the view measures itself on resize anyway.
     if (doc.readyState === 'complete') setup(); else w.addEventListener('load', setup);
     setTimeout(setup, 300);
-    this._pollClosed = setInterval(() => { if (w.closed) this._disposeWindow(); }, 1000);
+    this._pollClosed = setInterval(() => { if (w.closed && this.win === w) this._disposeWindow(); }, 1000);
     this._placeOnSecondScreen(w);
   }
 
@@ -249,8 +267,10 @@ export class OutputManager {
 
   _disposeWindow() {
     clearInterval(this._pollClosed);
+    this._windowHudCleanup?.();
+    this._windowHudCleanup = null;
     if (this.windowView) {
-      try { this.windowView.dispose(); } catch { /* window gone */ }
+      this._releaseView(this.windowView);
       this.windowView = null;
     }
     this.win = null;

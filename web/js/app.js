@@ -14,7 +14,7 @@ import { ColorPaint, ImagePaint, VideoPaint, CameraPaint, isImageFile, isVideoFi
 import { Affine } from './model/geometry.js';
 import { ShapeMode } from './model/shapes.js';
 import { parseMmp, writeMmp, ProjectFormatError } from './io/mmp.js';
-import { createZip, readZip } from './io/zip.js';
+import { createZip, readZip, ZipError } from './io/zip.js';
 import { storage } from './io/storage.js';
 import { History } from './history.js';
 import { EditorView, ZOOM_FACTOR } from './ui/view.js';
@@ -55,13 +55,22 @@ function loadSettings() {
   }
 }
 
+/*
+ * "mod" accepts both Ctrl and ⌘. On a Mac ⌘ is shown, except with keys whose ⌘ shortcut
+ * the browser or macOS keeps for itself (new window/tab, close, minimize, quit, hide,
+ * reload): a web page never receives those, so ⌃ is shown for them.
+ */
+const MAC_RESERVED_CMD_KEYS = new Set(['KeyN', 'KeyT', 'KeyW', 'KeyM', 'KeyQ', 'KeyH', 'KeyR']);
+
 /** Formats a shortcut spec ("mod+shift+KeyS") for display. */
 function formatShortcut(spec) {
   if (!spec) return '';
   const first = Array.isArray(spec) ? spec[0] : spec;
-  return first.split('+').map((p) => {
+  const parts = first.split('+');
+  const macMod = MAC_RESERVED_CMD_KEYS.has(parts[parts.length - 1]) ? '⌃' : '⌘';
+  return parts.map((p) => {
     switch (p) {
-      case 'mod': return IS_MAC ? '⌃' : 'Ctrl+';
+      case 'mod': return IS_MAC ? macMod : 'Ctrl+';
       case 'shift': return IS_MAC ? '⇧' : 'Shift+';
       case 'alt': return IS_MAC ? '⌥' : 'Alt+';
       case 'Space': return t('key.space');
@@ -160,6 +169,7 @@ export class App {
   /* -------------------------------------------------------------- events */
 
   on(event, fn) { (this.listeners[event] ||= []).push(fn); }
+  off(event, fn) { this.listeners[event] = (this.listeners[event] || []).filter((f) => f !== fn); }
   emit(event, ...args) { for (const fn of this.listeners[event] || []) fn(...args); }
 
   /** Something changed in the model or selection: refresh UI and redraw. */
@@ -232,10 +242,35 @@ export class App {
 
   /** Records the current state as an undoable step. */
   commit(label, { mergeKey = null } = {}) {
+    const before = this._referencedPaints();
     this.history.push(this._historyState(label), mergeKey);
+    // A deleted source whose undo steps were dropped (redo branch, history limit) can never
+    // come back: release its media.
+    const after = this._referencedPaints();
+    for (const p of before) if (!after.has(p)) p.dispose();
     this.updatePlayingState();
     this.emitChange();
     this.scheduleAutosave();
+  }
+
+  /** Paints of the project and of every undo/redo step. */
+  _referencedPaints() {
+    const set = new Set(this.project.paints);
+    for (const s of this.history.states) for (const { ref } of s.snap.paints) set.add(ref);
+    return set;
+  }
+
+  /**
+   * History snapshots taken while media was still loading have no media blob, so undoing a
+   * later "replace file" could not bring the original back: record the loaded media in them.
+   */
+  _attachLoadedMediaToHistory(paints) {
+    for (const p of paints) {
+      if (!p.blob) continue;
+      for (const s of this.history.states) {
+        for (const e of s.snap.paints) if (e.ref === p && !e.blob) e.blob = p.blob;
+      }
+    }
   }
 
   _restoreState(state) {
@@ -1033,14 +1068,14 @@ export class App {
       if (!ok) return;
     }
     this._replaceProject(new Project(), 'mapmap');
-    try { await storage.clearMedia(); } catch { /* ignore */ }
-    this._storedMedia.clear();
     this.flushAutosave();
     toast(t('status.newProject'));
   }
 
   _replaceProject(project, name) {
-    for (const p of this.project.paints) p.dispose();
+    // Release the media of the old project, including sources only kept alive by undo history.
+    for (const p of this._referencedPaints()) if (!project.paints.includes(p)) p.dispose();
+    this._storedMedia.clear();
     this.project = project;
     this.projectName = name || 'mapmap';
     this.currentMappingId = null;
@@ -1091,32 +1126,46 @@ export class App {
       }
     } catch (err) {
       console.warn(err);
-      alertDialog(err instanceof ProjectFormatError && err.message === 'version' ? t('error.projectVersion') : t('error.projectInvalid'));
+      if (err instanceof ZipError && err.code !== 'not-a-zip') alertDialog(t('error.bundleCorrupt', { name: file.name }));
+      else alertDialog(err instanceof ProjectFormatError && err.message === 'version' ? t('error.projectVersion') : t('error.projectInvalid'));
       return;
     }
     const { project, media } = parsed;
     const name = file.name.replace(/\.[^.]+$/, '');
-    this._replaceProject(project, name);
-    try { await storage.clearMedia(); } catch { /* ignore */ }
-    this._storedMedia.clear();
 
+    // Extract and verify every referenced media file before replacing the current project,
+    // so a damaged bundle leaves the open project untouched.
     const byName = new Map(extraMedia.map((f) => [f.name.toLowerCase(), f]));
+    const files = new Map(); // paint -> File
+    let current = '';
+    try {
+      for (const { paint, uri } of media) {
+        if (paint.kind === 'camera') continue;
+        current = uri;
+        let blob = null;
+        if (zipEntries) {
+          const entry = zipEntries.get(uri) || [...zipEntries.values()].find((e) => baseName(e.name).toLowerCase() === baseName(uri).toLowerCase());
+          if (entry) blob = await entry.blob();
+        }
+        if (!blob) blob = byName.get(baseName(uri).toLowerCase()) || null;
+        if (blob) files.set(paint, blob instanceof File ? blob : new File([blob], baseName(uri), { type: blob.type || mimeFromName(uri) }));
+      }
+    } catch (err) {
+      console.warn(err);
+      alertDialog(t('error.bundleCorrupt', { name: baseName(current) || file.name }));
+      return;
+    }
+
+    this._replaceProject(project, name);
     const loads = [];
     for (const { paint, uri } of media) {
       if (paint.kind === 'camera') { loads.push(paint.open({ deviceId: paint.deviceId, facingMode: paint.facingMode }).catch(() => { paint.status = 'error'; })); continue; }
-      let blob = null;
-      if (zipEntries) {
-        const entry = zipEntries.get(uri) || [...zipEntries.values()].find((e) => baseName(e.name).toLowerCase() === baseName(uri).toLowerCase());
-        if (entry) blob = await entry.blob();
-      }
-      if (!blob) blob = byName.get(baseName(uri).toLowerCase()) || null;
-      if (blob) {
-        loads.push(paint.load(blob instanceof File ? blob : new File([blob], baseName(uri), { type: blob.type || mimeFromName(uri) }), uri).catch(() => { paint.status = 'error'; }));
-      } else {
-        paint.status = 'missing';
-      }
+      const f = files.get(paint);
+      if (f) loads.push(paint.load(f, uri).catch(() => { paint.status = 'error'; }));
+      else paint.status = 'missing';
     }
     await Promise.all(loads);
+    this._attachLoadedMediaToHistory(project.paints);
     this.updatePlayingState();
     this.emitChange();
     for (const v of this.allViews()) v.fit();
@@ -1169,14 +1218,18 @@ export class App {
   async saveBundle() {
     const entries = [];
     const paths = new Map();
+    // Lower-case keys: unpacked on a case-insensitive file system (macOS, Windows),
+    // "Photo.png" and "photo.png" would overwrite each other.
     const used = new Set();
     for (const p of this.project.paints) {
       if ((p.kind === 'image' || p.kind === 'video') && p.blob) {
         let name = baseName(p.uri) || `${p.kind}-${p.id}`;
         name = name.replace(/[\\/:*?"<>|]/g, '_');
         let path = `media/${name}`;
-        if (used.has(path)) path = `media/${p.id}-${name}`;
-        used.add(path);
+        for (let n = 1; used.has(path.toLowerCase()); n++) {
+          path = n === 1 ? `media/${p.id}-${name}` : `media/${p.id}-${n}-${name}`;
+        }
+        used.add(path.toLowerCase());
         paths.set(p.id, path);
         entries.push({ name: path, data: p.blob });
       }
@@ -1189,7 +1242,7 @@ export class App {
       await this.saveBlob(zip, `${this.projectName || 'mapmap'}.mmpz`, 'application/zip');
     } catch (err) {
       console.error(err);
-      alertDialog(t('error.saveFailed'));
+      alertDialog(t(err instanceof ZipError && err.code === 'too-large' ? 'error.bundleTooLarge' : 'error.saveFailed'));
     }
   }
 
@@ -1226,28 +1279,38 @@ export class App {
     this._autosaveTimer = setTimeout(() => this.flushAutosave(), 700);
   }
 
-  async flushAutosave() {
+  /** Saves the project and its media; saves run one after another, never concurrently. */
+  flushAutosave() {
     clearTimeout(this._autosaveTimer);
     this._autosaveTimer = null;
+    this._autosaveChain = (this._autosaveChain || Promise.resolve()).then(() => this._writeAutosave());
+    return this._autosaveChain;
+  }
+
+  async _writeAutosave() {
+    const project = this.project;
     try {
-      const json = this.project.toJSON();
+      const json = project.toJSON();
       json.projectName = this.projectName;
       json.currentMappingId = this.currentMappingId;
       json.currentPaintId = this.currentPaintId;
       json.playing = this.playing;
-      await storage.set('project', json);
-      const ids = new Set();
-      for (const p of this.project.paints) {
-        if ((p.kind === 'image' || p.kind === 'video') && p.blob) {
-          ids.add(p.id);
-          if (this._storedMedia.get(p.id) !== p.blob) {
-            await storage.putMedia(p.id, { blob: p.blob, name: p.uri, type: p.blob.type });
-            this._storedMedia.set(p.id, p.blob);
-          }
+      const keep = new Set();
+      const puts = [];
+      for (const p of project.paints) {
+        if (p.kind !== 'image' && p.kind !== 'video') continue;
+        // Media still loading from the autosave has no blob yet but its record must stay.
+        if (!p.blob && !this._storedMedia.has(p.id)) continue;
+        keep.add(p.id);
+        if (p.blob && this._storedMedia.get(p.id) !== p.blob) {
+          puts.push({ id: p.id, blob: p.blob, record: { blob: p.blob, name: p.uri, type: p.blob.type } });
         }
       }
-      for (const key of await storage.mediaKeys()) {
-        if (!ids.has(key)) { await storage.deleteMedia(key); this._storedMedia.delete(key); }
+      // Project, changed media and removal of unused media are written atomically.
+      await storage.saveSnapshot(json, puts, keep);
+      if (this.project === project) {
+        for (const { id, blob } of puts) this._storedMedia.set(id, blob);
+        for (const id of [...this._storedMedia.keys()]) if (!keep.has(id)) this._storedMedia.delete(id);
       }
       this._setSaveStatus(t('status.autosaved'));
     } catch (err) {
@@ -1277,12 +1340,13 @@ export class App {
       if (p.kind === 'camera') {
         loads.push(p.open({ deviceId: p.deviceId, facingMode: p.facingMode }).catch(() => { p.status = 'error'; }));
       } else if (p.kind === 'image' || p.kind === 'video') {
+        this._storedMedia.set(p.id, null); // its record is in the autosave (see _writeAutosave)
         loads.push((async () => {
           const rec = await storage.getMedia(p.id).catch(() => null);
           if (!rec || !rec.blob) { p.status = 'missing'; return; }
           const file = rec.blob instanceof File ? rec.blob : new File([rec.blob], baseName(rec.name || p.uri), { type: rec.type || rec.blob.type });
           await p.load(file, p.uri).catch(() => { p.status = 'error'; });
-          this._storedMedia.set(p.id, p.blob);
+          if (this.project === project) this._storedMedia.set(p.id, p.blob);
         })());
       }
     }
@@ -1293,6 +1357,7 @@ export class App {
     this.history.reset(this._historyState('history.open'));
     this.emitChange();
     await Promise.all(loads);
+    this._attachLoadedMediaToHistory(project.paints);
     this.updatePlayingState();
     this.emitChange();
     for (const v of this.allViews()) v.fit();

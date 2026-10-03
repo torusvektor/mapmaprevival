@@ -225,6 +225,8 @@ const cs = {
   'error.projectInvalid': 'Soubor není platný projekt MapMap.',
   'error.projectVersion': 'Tuto verzi projektu MapMap nelze načíst.',
   'error.saveFailed': 'Projekt se nepodařilo uložit.',
+  'error.bundleCorrupt': 'Balíček projektu je poškozený nebo nepodporovaný (soubor {name}). Otevřený projekt zůstal beze změny.',
+  'error.bundleTooLarge': 'Projekt je na balíček .mmpz příliš velký (limit 4 GB). Exportujte jen soubor .mmp a média si zkopírujte zvlášť.',
   'error.quota': 'V zařízení došlo místo – média se nemusí uložit pro příští spuštění. Uložte projekt jako .mmpz.',
   'error.popupBlocked': 'Prohlížeč zablokoval nové okno. Povolte vyskakovací okna pro tuto stránku.',
 
@@ -500,6 +502,8 @@ const en = {
   'error.projectInvalid': 'The file is not a valid MapMap project.',
   'error.projectVersion': 'This MapMap project version cannot be read.',
   'error.saveFailed': 'The project could not be saved.',
+  'error.bundleCorrupt': 'The project bundle is damaged or not supported (file {name}). The open project was left unchanged.',
+  'error.bundleTooLarge': 'The project is too large for a .mmpz bundle (4 GB limit). Export only the .mmp file and copy the media separately.',
   'error.quota': 'The device is out of storage – media may not be kept for the next session. Save the project as .mmpz.',
   'error.popupBlocked': 'The browser blocked the new window. Allow pop-ups for this page.',
 

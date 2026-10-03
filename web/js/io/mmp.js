@@ -12,7 +12,7 @@
 
 import { Project, Mapping, DEFAULT_OUTPUT_WIDTH, DEFAULT_OUTPUT_HEIGHT } from '../model/project.js';
 import { ColorPaint, ImagePaint, VideoPaint, CameraPaint } from '../model/paints.js';
-import { createShape, Mesh } from '../model/shapes.js';
+import { createShape, Mesh, validShapeData, shapesMatch } from '../model/shapes.js';
 
 export const WEB_VERSION = '0.7.0-web';
 const SUPPORTED_FILE_VERSIONS = /\d+\.\d+\.\d+/;
@@ -133,15 +133,16 @@ function parseShape(el) {
   const vertices = [];
   const verticesEl = child(el, 'vertices');
   if (verticesEl) {
-    for (const v of verticesEl.children) vertices.push({ x: num(v.getAttribute('x')), y: num(v.getAttribute('y')) });
+    for (const v of verticesEl.children) vertices.push({ x: parseFloat(v.getAttribute('x')), y: parseFloat(v.getAttribute('y')) });
   }
   if (shape instanceof Mesh) {
-    const nColumns = Math.max(2, parseInt(childText(el, 'nColumns'), 10) || 2);
-    const nRows = Math.max(2, parseInt(childText(el, 'nRows'), 10) || 2);
-    if (vertices.length !== nColumns * nRows) return null;
+    // Grid size defaults to 2 x 2 when missing, as written by older versions.
+    const nColumns = parseInt(childText(el, 'nColumns') ?? '2', 10);
+    const nRows = parseInt(childText(el, 'nRows') ?? '2', 10);
+    if (!validShapeData('Mesh', vertices, nColumns, nRows)) return null;
     shape.init(vertices, nColumns, nRows);
   } else {
-    if (vertices.length < 3) return null;
+    if (!validShapeData(shape.className, vertices)) return null;
     shape.setVertices(vertices);
     shape.build();
   }
@@ -159,7 +160,7 @@ function parseMapping(el, project) {
   let inputShape = null;
   if (paint.isTexture()) {
     inputShape = parseShape(child(el, 'source'));
-    if (!inputShape) inputShape = shape.clone();
+    if (!shapesMatch(shape, inputShape)) inputShape = shape.clone();
   }
   const m = new Mapping(id, paint, shape, inputShape);
   readElement(el, m);

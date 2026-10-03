@@ -8,7 +8,7 @@
  * (at your option) any later version.
  */
 
-import { Mesh, Triangle, Ellipse, shapeFromJSON } from './shapes.js';
+import { Mesh, Triangle, Ellipse, shapeFromJSON, shapesMatch } from './shapes.js';
 import { createPaint, ColorPaint } from './paints.js';
 
 export class Mapping {
@@ -57,9 +57,15 @@ export class Mapping {
     };
   }
 
+  /** Returns null when the output shape is invalid. */
   static fromJSON(json, paint) {
     const shape = shapeFromJSON(json.shape);
-    const inputShape = json.inputShape && paint && paint.isTexture() ? shapeFromJSON(json.inputShape) : null;
+    if (!shape) return null;
+    let inputShape = null;
+    if (paint && paint.isTexture()) {
+      inputShape = shapeFromJSON(json.inputShape);
+      if (!shapesMatch(shape, inputShape)) inputShape = shape.clone();
+    }
     const m = new Mapping(json.id, paint, shape, inputShape);
     m.name = json.name || '';
     m.opacity = json.opacity ?? 1;
@@ -241,8 +247,9 @@ export class Project {
   /** Creates a project from toJSON() data. Media still has to be loaded afterwards. */
   static fromJSON(json) {
     const project = new Project();
-    project.outputWidth = json.outputWidth || DEFAULT_OUTPUT_WIDTH;
-    project.outputHeight = json.outputHeight || DEFAULT_OUTPUT_HEIGHT;
+    const size = (n, def) => (Number.isFinite(n) && n > 0 ? n : def);
+    project.outputWidth = size(json.outputWidth, DEFAULT_OUTPUT_WIDTH);
+    project.outputHeight = size(json.outputHeight, DEFAULT_OUTPUT_HEIGHT);
     for (const pj of json.paints || []) {
       const paint = createPaint(pj.kind, pj.id);
       if (!paint) continue;
@@ -251,7 +258,8 @@ export class Project {
     }
     for (const mj of json.mappings || []) {
       const paint = project.getPaintById(mj.paintId);
-      if (paint) project.mappings.push(Mapping.fromJSON(mj, paint));
+      const mapping = paint ? Mapping.fromJSON(mj, paint) : null;
+      if (mapping) project.mappings.push(mapping);
     }
     project.reserveIds();
     return project;

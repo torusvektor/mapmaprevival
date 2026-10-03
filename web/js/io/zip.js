@@ -41,8 +41,25 @@ function dosDateTime(date = new Date()) {
   return { time, day };
 }
 
+const MAX_U32 = 0xffffffff;
+const MAX_U16 = 0xffff;
+
+/**
+ * Error thrown for archives that are damaged ('corrupt'), not ZIP files ('not-a-zip'),
+ * use features this reader does not support ('encrypted', 'zip64', 'method'), or
+ * that do not fit in a classic ZIP file when writing ('too-large').
+ */
+export class ZipError extends Error {
+  constructor(code) {
+    super(code);
+    this.name = 'ZipError';
+    this.code = code;
+  }
+}
+
 /**
  * Creates a ZIP Blob from entries [{ name, data: Blob|string|Uint8Array }].
+ * Classic ZIP only (no ZIP64): throws ZipError('too-large') past 4 GB or 65535 entries.
  */
 export async function createZip(entries) {
   const enc = new TextEncoder();
@@ -50,12 +67,14 @@ export async function createZip(entries) {
   const central = [];
   let offset = 0;
   const { time, day } = dosDateTime();
+  if (entries.length > MAX_U16) throw new ZipError('too-large');
 
   for (const entry of entries) {
     const blob = entry.data instanceof Blob ? entry.data : new Blob([entry.data]);
     const nameBytes = enc.encode(entry.name);
-    const crc = await crc32OfBlob(blob);
     const size = blob.size;
+    if (size >= MAX_U32 || offset >= MAX_U32 || nameBytes.length > MAX_U16) throw new ZipError('too-large');
+    const crc = await crc32OfBlob(blob);
 
     const local = new DataView(new ArrayBuffer(30));
     local.setUint32(0, 0x04034b50, true);
@@ -90,6 +109,7 @@ export async function createZip(entries) {
   }
 
   const cdSize = central.reduce((s, p) => s + (p.byteLength ?? p.length), 0);
+  if (offset >= MAX_U32 || offset + cdSize >= MAX_U32) throw new ZipError('too-large');
   const end = new DataView(new ArrayBuffer(22));
   end.setUint32(0, 0x06054b50, true);
   end.setUint16(8, entries.length, true);
@@ -100,47 +120,81 @@ export async function createZip(entries) {
 }
 
 /**
- * Reads a ZIP Blob. Returns a Map name -> { name, size, blob(): Promise<Blob> }.
+ * Reads a ZIP Blob. Returns a Map name -> { name, size, blob(): Promise<Blob>, text() }.
+ * The structure is checked when reading; every blob() is checked against the size and
+ * CRC-32 recorded in the archive and rejects with a ZipError if it does not match.
  */
 export async function readZip(blob) {
-  const tailSize = Math.min(blob.size, 65536 + 22);
-  const tail = new DataView(await blob.slice(blob.size - tailSize).arrayBuffer());
+  const tailSize = Math.min(blob.size, 65535 + 22);
+  const tailStart = blob.size - tailSize;
+  const tail = new DataView(await blob.slice(tailStart).arrayBuffer());
   let eocd = -1;
   for (let i = tail.byteLength - 22; i >= 0; i--) {
-    if (tail.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+    // The comment must fit in the file (rules out the signature bytes inside the comment).
+    if (tail.getUint32(i, true) === 0x06054b50 && i + 22 + tail.getUint16(i + 20, true) <= tail.byteLength) { eocd = i; break; }
   }
-  if (eocd < 0) throw new Error('not-a-zip');
+  if (eocd < 0) throw new ZipError('not-a-zip');
+  if (eocd >= 20 && tail.getUint32(eocd - 20, true) === 0x07064b50) throw new ZipError('zip64');
+  const disk = tail.getUint16(eocd + 4, true);
+  const cdDisk = tail.getUint16(eocd + 6, true);
+  const diskCount = tail.getUint16(eocd + 8, true);
   const count = tail.getUint16(eocd + 10, true);
   const cdSize = tail.getUint32(eocd + 12, true);
   const cdOffset = tail.getUint32(eocd + 16, true);
+  if (count === MAX_U16 || cdSize === MAX_U32 || cdOffset === MAX_U32) throw new ZipError('zip64');
+  if (disk !== 0 || cdDisk !== 0 || diskCount !== count) throw new ZipError('corrupt');
+  // The central directory sits between the local entries and the end record.
+  const eocdPos = tailStart + eocd;
+  if (cdOffset + cdSize > eocdPos) throw new ZipError('corrupt');
   const cd = new DataView(await blob.slice(cdOffset, cdOffset + cdSize).arrayBuffer());
   const dec = new TextDecoder();
   const entries = new Map();
   let p = 0;
   for (let i = 0; i < count; i++) {
-    if (cd.getUint32(p, true) !== 0x02014b50) throw new Error('bad-zip');
+    if (p + 46 > cd.byteLength || cd.getUint32(p, true) !== 0x02014b50) throw new ZipError('corrupt');
+    const flags = cd.getUint16(p + 8, true);
     const method = cd.getUint16(p + 10, true);
+    const crc = cd.getUint32(p + 16, true);
     const compSize = cd.getUint32(p + 20, true);
     const size = cd.getUint32(p + 24, true);
     const nameLen = cd.getUint16(p + 28, true);
     const extraLen = cd.getUint16(p + 30, true);
     const commentLen = cd.getUint16(p + 32, true);
     const localOffset = cd.getUint32(p + 42, true);
+    if (p + 46 + nameLen + extraLen + commentLen > cd.byteLength) throw new ZipError('corrupt');
     const name = dec.decode(new Uint8Array(cd.buffer, cd.byteOffset + p + 46, nameLen));
     p += 46 + nameLen + extraLen + commentLen;
+    if (flags & 0x0041) throw new ZipError('encrypted'); // bit 0: encrypted, bit 6: strong encryption
+    if (compSize === MAX_U32 || size === MAX_U32 || localOffset === MAX_U32) throw new ZipError('zip64');
+    if (localOffset + 30 + compSize > cdOffset) throw new ZipError('corrupt');
+    if (method === 0 && compSize !== size) throw new ZipError('corrupt');
     if (name.endsWith('/')) continue;
+    if (entries.has(name)) throw new ZipError('corrupt');
     entries.set(name, {
       name,
       size,
       async blob() {
         const lh = new DataView(await blob.slice(localOffset, localOffset + 30).arrayBuffer());
+        if (lh.byteLength < 30 || lh.getUint32(0, true) !== 0x04034b50) throw new ZipError('corrupt');
+        if (lh.getUint16(6, true) & 0x0041) throw new ZipError('encrypted');
+        if (lh.getUint16(8, true) !== method) throw new ZipError('corrupt');
         const start = localOffset + 30 + lh.getUint16(26, true) + lh.getUint16(28, true);
+        if (start + compSize > cdOffset) throw new ZipError('corrupt');
         const raw = blob.slice(start, start + compSize);
-        if (method === 0) return raw;
-        if (method === 8 && typeof DecompressionStream !== 'undefined') {
-          return new Response(raw.stream().pipeThrough(new DecompressionStream('deflate-raw'))).blob();
+        let data;
+        if (method === 0) {
+          data = raw;
+        } else if (method === 8 && typeof DecompressionStream !== 'undefined') {
+          try {
+            data = await new Response(raw.stream().pipeThrough(new DecompressionStream('deflate-raw'))).blob();
+          } catch {
+            throw new ZipError('corrupt');
+          }
+        } else {
+          throw new ZipError('method');
         }
-        throw new Error('unsupported-zip-method');
+        if (data.size !== size || await crc32OfBlob(data) !== crc) throw new ZipError('corrupt');
+        return data;
       },
       async text() { return (await this.blob()).text(); },
     });

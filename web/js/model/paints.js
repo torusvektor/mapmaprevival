@@ -171,10 +171,22 @@ export class TexturePaint extends Paint {
   /** Small image used as icon in the library list. */
   getThumbnailSource() { return this.getTextureSource(); }
 
-  toJSON() { return { ...super.toJSON(), x: this.x, y: this.y, uri: this.uri, rate: this.rate }; }
+  toJSON() {
+    return { ...super.toJSON(), x: this.x, y: this.y, uri: this.uri, rate: this.rate, width: this.naturalWidth, height: this.naturalHeight };
+  }
+
   applyJSON(json) {
     super.applyJSON(json);
     for (const k of ['x', 'y', 'uri', 'rate']) if (json[k] !== undefined) this[k] = json[k];
+    // Keeps the original size while the media is missing or still loading, so layers
+    // keep their place; loaded media always reports its own size.
+    if (this.status !== 'ready') {
+      const valid = (n) => Number.isFinite(n) && n > 0;
+      if (valid(json.width) && valid(json.height)) {
+        this.naturalWidth = json.width;
+        this.naturalHeight = json.height;
+      }
+    }
   }
 }
 
@@ -201,6 +213,7 @@ export class ImagePaint extends TexturePaint {
     if (this.url) URL.revokeObjectURL(this.url);
     this.url = URL.createObjectURL(blob);
     try {
+      const oldFrames = this.frames;
       const frames = await decodeAnimatedImage(blob);
       if (frames && frames.length > 1) {
         this.frames = frames.frames;
@@ -215,6 +228,7 @@ export class ImagePaint extends TexturePaint {
         this.naturalHeight = img.naturalHeight || img.height;
         this.frames = [{ source: downscaleIfNeeded(img, this.naturalWidth, this.naturalHeight), duration: 0 }];
       }
+      closeFrames(oldFrames);
       this.currentFrame = 0;
       this.status = 'ready';
       this.version++;
@@ -255,9 +269,16 @@ export class ImagePaint extends TexturePaint {
 
   dispose() {
     super.dispose();
-    for (const f of this.frames) if (f.source && f.source.close) f.source.close();
+    closeFrames(this.frames);
     this.frames = [];
+    if (this.url) URL.revokeObjectURL(this.url);
+    this.url = null;
   }
+}
+
+/** Frees the decoded animation frames (ImageBitmaps) that are no longer displayed. */
+function closeFrames(frames) {
+  for (const f of frames) if (f.source && f.source.close) f.source.close();
 }
 
 /** Downscales very large images so they fit into a GPU texture. */
@@ -314,6 +335,7 @@ export class VideoPaint extends TexturePaint {
     this.video = null;
     this.autoMuted = false;
     this._frameCallback = null;
+    this._ownsUrl = false; // true when this.url is a Blob URL created by load()
   }
   get kind() { return 'video'; }
   get className() { return 'Video'; }
@@ -373,16 +395,24 @@ export class VideoPaint extends TexturePaint {
     this.status = 'loading';
     this.blob = blob;
     if (uri) this.uri = uri;
-    if (this.url) URL.revokeObjectURL(this.url);
+    this._releaseUrl();
     this.url = URL.createObjectURL(blob);
+    this._ownsUrl = true;
     await this._loadUrl(this.url);
   }
 
   async loadUrl(url, uri) {
     this.status = 'loading';
     if (uri) this.uri = uri;
+    this._releaseUrl();
     this.url = url;
     await this._loadUrl(url);
+  }
+
+  _releaseUrl() {
+    if (this.url && this._ownsUrl) URL.revokeObjectURL(this.url);
+    this.url = null;
+    this._ownsUrl = false;
   }
 
   async _loadUrl(url) {
@@ -470,6 +500,7 @@ export class VideoPaint extends TexturePaint {
 
   dispose() {
     this._destroyVideo();
+    this._releaseUrl();
   }
 
   toJSON() { return { ...super.toJSON(), volume: this.volume }; }

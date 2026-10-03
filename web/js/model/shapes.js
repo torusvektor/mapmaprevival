@@ -504,10 +504,35 @@ export function createShape(className) {
   }
 }
 
-/** Restores a shape from toJSON() output. */
+/**
+ * Whether the vertices fit the shape class: finite coordinates and the vertex count the
+ * class needs (a Mesh needs its full grid). Damaged files are rejected here rather than
+ * failing later while drawing.
+ */
+export function validShapeData(className, vertices, nColumns, nRows) {
+  if (!Array.isArray(vertices)) return false;
+  if (!vertices.every((v) => v && Number.isFinite(v.x) && Number.isFinite(v.y))) return false;
+  const n = vertices.length;
+  switch (className) {
+    case 'Triangle': return n === 3;
+    case 'Quad': return n === 4;
+    case 'Ellipse': return n === 4 || n === 5;
+    case 'Mesh':
+      return Number.isInteger(nColumns) && Number.isInteger(nRows) && nColumns >= 2 && nRows >= 2 && n === nColumns * nRows;
+    default: return false;
+  }
+}
+
+/** Whether `input` can be the input (source) shape of a layer whose output shape is `shape`. */
+export function shapesMatch(shape, input) {
+  if (!shape || !input || input.className !== shape.className || input.nVertices() !== shape.nVertices()) return false;
+  return !(shape instanceof Mesh) || (input.nColumns === shape.nColumns && input.nRows === shape.nRows);
+}
+
+/** Restores a shape from toJSON() output; returns null for invalid data. */
 export function shapeFromJSON(json) {
+  if (!json || !validShapeData(json.className, json.vertices, json.nColumns, json.nRows)) return null;
   const shape = createShape(json.className);
-  if (!shape) return null;
   if (shape instanceof Mesh) shape.init(json.vertices, json.nColumns, json.nRows);
   else shape.setVertices(json.vertices);
   shape.locked = !!json.locked;

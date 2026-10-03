@@ -46,26 +46,33 @@ const reqP = (req) => new Promise((resolve, reject) => {
 });
 
 export const storage = {
+  /**
+   * Writes a complete autosave in one transaction: the project, the media records that
+   * changed and the removal of media no longer referenced. If anything fails (for example
+   * the storage quota) nothing is written and the previous complete autosave is kept.
+   */
+  async saveSnapshot(projectJson, mediaPuts, keepIds) {
+    const db = await openDb();
+    return new Promise((resolve, reject) => {
+      const t = db.transaction(['kv', 'media'], 'readwrite');
+      const kv = t.objectStore('kv');
+      const media = t.objectStore('media');
+      kv.put(projectJson, 'project');
+      for (const { id, record } of mediaPuts) media.put(record, id);
+      const keysReq = media.getAllKeys();
+      keysReq.onsuccess = () => {
+        for (const key of keysReq.result) if (!keepIds.has(key)) media.delete(key);
+      };
+      t.oncomplete = () => resolve();
+      t.onerror = () => reject(t.error);
+      t.onabort = () => reject(t.error || new Error('aborted'));
+    });
+  },
   async get(key) {
     return tx('kv', 'readonly', (s) => reqP(s.get(key)));
   },
-  async set(key, value) {
-    return tx('kv', 'readwrite', (s) => { s.put(value, key); });
-  },
-  async putMedia(id, record) {
-    return tx('media', 'readwrite', (s) => { s.put(record, id); });
-  },
   async getMedia(id) {
     return tx('media', 'readonly', (s) => reqP(s.get(id)));
-  },
-  async deleteMedia(id) {
-    return tx('media', 'readwrite', (s) => { s.delete(id); });
-  },
-  async mediaKeys() {
-    return tx('media', 'readonly', (s) => reqP(s.getAllKeys()));
-  },
-  async clearMedia() {
-    return tx('media', 'readwrite', (s) => { s.clear(); });
   },
   async requestPersistence() {
     try {
